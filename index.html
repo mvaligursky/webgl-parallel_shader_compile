@@ -1,0 +1,1538 @@
+<!doctype html>
+<html>
+   <body>
+
+      <button onclick="compileManyShaders(10)">Compile 10</button>
+      <button onclick="compileManyShaders(50)">Compile 50</button>
+
+      <div>
+      <canvas width = "400" height = "400" id = "my_Canvas"></canvas>
+      </div>
+
+      <script>
+         function getVS() {
+            return `#version 300 es
+            #define attribute in
+            #define varying out
+            #define texture2D texture
+            #define GL2
+            #define VERTEXSHADER
+
+            #define SHADER_NAME LitShader
+            varying vec2 vUV0_1;
+            varying vec3 vPositionW;
+            varying vec3 vNormalW;
+            attribute vec3 vertex_position;
+            attribute vec3 vertex_normal;
+            attribute vec4 vertex_tangent;
+            attribute vec2 vertex_texCoord0;
+            attribute vec2 vertex_texCoord1;
+            attribute vec4 vertex_color;
+            uniform mat4 matrix_viewProjection;
+            uniform mat4 matrix_model;
+            uniform mat3 matrix_normal;
+            vec3 dPositionW;
+            mat4 dModelMatrix;
+            mat3 dNormalMatrix;
+            vec2 getUv0() {
+               return vertex_texCoord0;
+            }
+            uniform vec3 texture_diffuseMapTransform0;
+            uniform vec3 texture_diffuseMapTransform1;
+            mat4 getModelMatrix() {
+               return matrix_model;
+            }
+            vec4 getPosition() {
+               dModelMatrix = getModelMatrix();
+               vec3 localPos = vertex_position;
+               vec4 posW = dModelMatrix * vec4(localPos, 1.0);
+               dPositionW = posW.xyz;
+               vec4 screenPos;
+               screenPos = matrix_viewProjection * posW;
+               return screenPos;
+            }
+            vec3 getWorldPosition() {
+               return dPositionW;
+            }
+            vec3 getNormal() {
+               dNormalMatrix = matrix_normal;
+               vec3 tempNormal = vertex_normal;
+               return normalize(dNormalMatrix * tempNormal);
+            }
+            void main(void) {
+               gl_Position = getPosition();
+               vPositionW = getWorldPosition();
+               vNormalW = getNormal();
+               vec2 uv0 = getUv0();
+               vUV0_1 = vec2(dot(vec3(uv0, 1), texture_diffuseMapTransform0), dot(vec3(uv0, 1), texture_diffuseMapTransform1));
+            }
+            `;
+         }
+
+         function getFS() {
+            return `#version 300 es
+            precision highp float;
+            precision highp sampler2DShadow;
+            #define varying in
+            out highp vec4 pc_fragColor;
+            #define gl_FragColor pc_fragColor
+            #define texture2D texture
+            #define texture2DBias texture
+            #define textureCube texture
+            #define texture2DProj textureProj
+            #define texture2DLodEXT textureLod
+            #define texture2DProjLodEXT textureProjLod
+            #define textureCubeLodEXT textureLod
+            #define texture2DGradEXT textureGrad
+            #define texture2DProjGradEXT textureProjGrad
+            #define textureCubeGradEXT textureGrad
+
+            #define textureShadow(res, uv) textureGrad(res, uv, vec2(1, 1), vec2(1, 1))
+            #define SHADOWMAP_PASS(name) name
+            #define SHADOWMAP_ACCEPT(name) sampler2DShadow name
+            #define TEXTURE_PASS(name) name
+            #define TEXTURE_ACCEPT(name) sampler2D name
+
+            #define GL2
+            #define SUPPORTS_TEXLOD
+
+            vec2 getGrabScreenPos(vec4 clipPos) {
+               vec2 uv = (clipPos.xy / clipPos.w) * 0.5 + 0.5;
+               return uv;
+            }
+            vec2 getImageEffectUV(vec2 uv) {
+               return uv;
+            }
+            #define SHADER_NAME LitShader
+            #define LIT_SPECULAR
+            #define LIT_REFLECTIONS
+            #define LIT_SPECULAR_FRESNEL
+            #define LIT_CONSERVE_ENERGY
+            varying vec2 vUV0_1;
+            varying vec3 vPositionW;
+            varying vec3 vNormalW;
+            uniform vec3 view_position;
+            uniform vec3 light_globalAmbient;
+            float square(float x) {
+               return x*x;
+            }
+            float saturate(float x) {
+               return clamp(x, 0.0, 1.0);
+            }
+            vec3 saturate(vec3 x) {
+               return clamp(x, vec3(0.0), vec3(1.0));
+            }
+            vec3 detailMode_mul(vec3 c1, vec3 c2) {
+               return c1 * c2;
+            }
+            vec3 detailMode_add(vec3 c1, vec3 c2) {
+               return c1 + c2;
+            }
+            vec3 detailMode_screen(vec3 c1, vec3 c2) {
+               return 1.0 - (1.0 - c1)*(1.0 - c2);
+            }
+            vec3 detailMode_overlay(vec3 c1, vec3 c2) {
+               return mix(1.0 - 2.0*(1.0 - c1)*(1.0 - c2), 2.0*c1*c2, step(c1, vec3(0.5)));
+            }
+            vec3 detailMode_min(vec3 c1, vec3 c2) {
+               return min(c1, c2);
+            }
+            vec3 detailMode_max(vec3 c1, vec3 c2) {
+               return max(c1, c2);
+            }
+            vec4 dReflection;
+            mat3 dTBN;
+            vec3 dVertexNormalW;
+            vec3 dViewDirW;
+            vec3 dReflDirW;
+            vec3 dDiffuseLight;
+            vec3 dSpecularLight;
+            vec3 dLightDirNormW;
+            vec3 dLightDirW;
+            vec3 dLightPosW;
+            vec3 dShadowCoord;
+            float dAtten;
+            float dAttenD;
+            vec3 dAtten3;
+            float ccFresnel;
+            vec3 ccReflection;
+            vec3 ccSpecularLight;
+            vec3 sSpecularLight;
+            vec3 sReflection;
+            uniform float textureBias;
+            float dAlpha = 1.0;
+            vec3 dNormalW;
+            vec3 dAlbedo;
+            vec3 dSpecularity;
+            float dGlossiness;
+            float dMetalness;
+            vec3 dEmission;
+            uniform sampler2D texture_normalMap;
+            uniform sampler2D texture_diffuseMap;
+            uniform sampler2D texture_glossMap;
+            float getSpotEffect(vec3 lightSpotDirW, float lightInnerConeAngle, float lightOuterConeAngle) {
+               float cosAngle = dot(dLightDirNormW, lightSpotDirW);
+               return smoothstep(lightOuterConeAngle, lightInnerConeAngle, cosAngle);
+            }
+            float getFalloffWindow(float lightRadius) {
+               float sqrDist = dot(dLightDirW, dLightDirW);
+               float invRadius = 1.0 / lightRadius;
+               return square( saturate( 1.0 - square( sqrDist * square(invRadius) ) ) );
+            }
+            float getFalloffInvSquared(float lightRadius) {
+               float sqrDist = dot(dLightDirW, dLightDirW);
+               float falloff = 1.0 / (sqrDist + 1.0);
+               float invRadius = 1.0 / lightRadius;
+               falloff *= 16.0;
+               falloff *= square( saturate( 1.0 - square( sqrDist * square(invRadius) ) ) );
+               return falloff;
+            }
+            float getFalloffLinear(float lightRadius) {
+               float d = length(dLightDirW);
+               return max(((lightRadius - d) / lightRadius), 0.0);
+            }
+            void getLightDirPoint(vec3 lightPosW) {
+               dLightDirW = vPositionW - lightPosW;
+               dLightDirNormW = normalize(dLightDirW);
+               dLightPosW = lightPosW;
+            }
+            #define AREA_LIGHTS
+            uniform highp sampler2D areaLightsLutTex1;
+            uniform highp sampler2D areaLightsLutTex2;
+            uniform float tbnBasis;
+            void getTBN() {
+               vec2 uv = vUV0_1;
+               vec3 dp1 = dFdx( vPositionW );
+               vec3 dp2 = dFdy( vPositionW );
+               vec2 duv1 = dFdx( uv );
+               vec2 duv2 = dFdy( uv );
+               vec3 dp2perp = cross( dp2, dVertexNormalW );
+               vec3 dp1perp = cross( dVertexNormalW, dp1 );
+               vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+               vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+               float denom = max( dot(T, T), dot(B, B) );
+               float invmax = (denom == 0.0) ? 0.0 : tbnBasis / sqrt( denom );
+               dTBN = mat3(T * invmax, -B * invmax, dVertexNormalW );
+            }
+            const float PI = 3.141592653589793;
+            vec2 toSpherical(vec3 dir) {
+               return vec2(dir.xz == vec2(0.0) ? 0.0 : atan(dir.x, dir.z), asin(dir.y));
+            }
+            vec2 toSphericalUv(vec3 dir) {
+               vec2 uv = toSpherical(dir) / vec2(PI * 2.0, PI) + 0.5;
+               return vec2(uv.x, 1.0 - uv.y);
+            }
+            vec3 decodeLinear(vec4 raw) {
+               return raw.rgb;
+            }
+            float decodeGamma(float raw) {
+               return pow(raw, 2.2);
+            }
+            vec3 decodeGamma(vec3 raw) {
+               return pow(raw, vec3(2.2));
+            }
+            vec3 decodeGamma(vec4 raw) {
+               return pow(raw.xyz, vec3(2.2));
+            }
+            vec3 decodeRGBM(vec4 raw) {
+               vec3 color = (8.0 * raw.a) * raw.rgb;
+               return color * color;
+            }
+            vec3 decodeRGBP(vec4 raw) {
+               vec3 color = raw.rgb * (-raw.a * 7.0 + 8.0);
+               return color * color;
+            }
+            vec3 decodeRGBE(vec4 raw) {
+               if (raw.a == 0.0) {
+                  return vec3(0.0, 0.0, 0.0);
+               }
+               else {
+                  return raw.xyz * pow(2.0, raw.w * 255.0 - 128.0);
+               }
+            }
+            vec4 passThrough(vec4 raw) {
+               return raw;
+            }
+            float gammaCorrectInput(float color) {
+               return decodeGamma(color);
+            }
+            vec3 gammaCorrectInput(vec3 color) {
+               return decodeGamma(color);
+            }
+            vec4 gammaCorrectInput(vec4 color) {
+               return vec4(decodeGamma(color.xyz), color.w);
+            }
+            vec3 gammaCorrectOutput(vec3 color) {
+               return pow(color + 0.0000001, vec3(1.0 / 2.2));
+            }
+            uniform float exposure;
+            vec3 toneMap(vec3 color) {
+               float tA = 2.51;
+               float tB = 0.03;
+               float tC = 2.43;
+               float tD = 0.59;
+               float tE = 0.14;
+               vec3 x = color * exposure;
+               return (x*(tA*x+tB))/(x*(tC*x+tD)+tE);
+            }
+            float dBlendModeFogFactor = 1.0;
+            vec3 addFog(vec3 color) {
+               return color;
+            }
+            vec3 unpackNormal(vec4 nmap) {
+               return nmap.xyz * 2.0 - 1.0;
+            }
+            #undef MAPFLOAT
+            #undef MAPCOLOR
+            #undef MAPVERTEX
+            #undef MAPTEXTURE
+            #undef MAPINVERT
+
+            vec3 addNormalDetail(vec3 normalMap) {
+               return normalMap;
+            }
+            #undef MAPFLOAT
+            #undef MAPCOLOR
+            #undef MAPVERTEX
+            #define MAPTEXTURE
+            #undef MAPINVERT
+
+            uniform float material_bumpiness;
+            void getNormal() {
+               vec3 normalMap = unpackNormal(texture2DBias(texture_normalMap, vUV0_1, textureBias));
+               normalMap = mix(vec3(0.0, 0.0, 1.0), normalMap, material_bumpiness);
+               dNormalW = normalize(dTBN * addNormalDetail(normalMap));
+            }
+            #undef MAPFLOAT
+            #undef MAPCOLOR
+            #undef MAPVERTEX
+            #undef MAPTEXTURE
+            #undef MAPINVERT
+
+            vec3 addAlbedoDetail(vec3 albedo) {
+               return albedo;
+            }
+            #undef MAPFLOAT
+            #undef MAPCOLOR
+            #undef MAPVERTEX
+            #define MAPTEXTURE
+            #undef MAPINVERT
+
+            void getAlbedo() {
+               dAlbedo = vec3(1.0);
+               vec3 albedoBase = decodeGamma(texture2DBias(texture_diffuseMap, vUV0_1, textureBias)).rgb;
+               dAlbedo *= addAlbedoDetail(albedoBase);
+            }
+            #define MAPFLOAT
+            #undef MAPCOLOR
+            #undef MAPVERTEX
+            #undef MAPTEXTURE
+            #undef MAPINVERT
+
+            uniform float material_metalness;
+            void getMetalness() {
+               float metalness = 1.0;
+               metalness *= material_metalness;
+               dMetalness = metalness;
+            }
+            void getSpecularity() {
+               dSpecularity = vec3(1);
+            }
+            #define MAPFLOAT
+            #undef MAPCOLOR
+            #undef MAPVERTEX
+            #define MAPTEXTURE
+            #undef MAPINVERT
+
+            uniform float material_gloss;
+            void getGlossiness() {
+               dGlossiness = 1.0;
+               dGlossiness *= material_gloss;
+               dGlossiness *= texture2DBias(texture_glossMap, vUV0_1, textureBias).g;
+               dGlossiness += 0.0000001;
+            }
+            #undef MAPFLOAT
+            #define MAPCOLOR
+            #undef MAPVERTEX
+            #undef MAPTEXTURE
+            #undef MAPINVERT
+
+            uniform vec3 material_emissive;
+            void getEmission() {
+               dEmission = vec3(1.0);
+               dEmission *= material_emissive;
+            }
+            vec3 cubeMapRotate(vec3 refDir) {
+               return refDir;
+            }
+            vec3 cubeMapProject(vec3 dir) {
+               return cubeMapRotate(dir);
+            }
+            uniform float skyboxIntensity;
+            vec3 processEnvironment(vec3 color) {
+               return color * skyboxIntensity;
+            }
+            uniform float material_f0;
+            void getMetalnessModulate() {
+               vec3 dielectricF0 = material_f0 * dSpecularity;
+               dSpecularity = mix(dielectricF0, dAlbedo, dMetalness);
+               dAlbedo *= 1.0 - dMetalness;
+            }
+            vec3 getFresnel(float cosTheta, vec3 f0) {
+               float fresnel = pow(1.0 - max(cosTheta, 0.0), 5.0);
+               float glossSq = dGlossiness * dGlossiness;
+               vec3 ret = f0 + (max(vec3(glossSq), f0) - f0) * fresnel;
+               return ret;
+            }
+            float getFresnelCC(float cosTheta) {
+               float fresnel = pow(1.0 - max(cosTheta, 0.0), 5.0);
+               return 0.04 + (1.0 - 0.04) * fresnel;
+            }
+            const float atlasSize = 512.0;
+            const float seamSize = 1.0 / atlasSize;
+            vec2 mapUv(vec2 uv, vec4 rect) {
+               return vec2(mix(rect.x + seamSize, rect.x + rect.z - seamSize, uv.x), mix(rect.y + seamSize, rect.y + rect.w - seamSize, uv.y));
+            }
+            vec2 mapRoughnessUv(vec2 uv, float level) {
+               float t = 1.0 / exp2(level);
+               return mapUv(uv, vec4(0, 1.0 - t, t, t * 0.5));
+            }
+            vec2 mapShinyUv(vec2 uv, float level) {
+               float t = 1.0 / exp2(level);
+               return mapUv(uv, vec4(1.0 - t, 1.0 - t, t, t * 0.5));
+            }
+            #define ENV_ATLAS
+            uniform sampler2D texture_envAtlas;
+            uniform float material_reflectivity;
+            float shinyMipLevel(vec2 uv) {
+               vec2 dx = dFdx(uv);
+               vec2 dy = dFdy(uv);
+               vec2 uv2 = vec2(fract(uv.x + 0.5), uv.y);
+               vec2 dx2 = dFdx(uv2);
+               vec2 dy2 = dFdy(uv2);
+               float maxd = min(max(dot(dx, dx), dot(dy, dy)), max(dot(dx2, dx2), dot(dy2, dy2)));
+               return clamp(0.5 * log2(maxd) - 1.0 + textureBias, 0.0, 5.0);
+            }
+            vec3 calcReflection(vec3 tReflDirW, float tGlossiness) {
+               vec3 dir = cubeMapProject(tReflDirW) * vec3(-1.0, 1.0, 1.0);
+               vec2 uv = toSphericalUv(dir);
+               float level = saturate(1.0 - tGlossiness) * 5.0;
+               float ilevel = floor(level);
+               float level2 = shinyMipLevel(uv * atlasSize);
+               float ilevel2 = floor(level2);
+               vec2 uv0, uv1;
+               float weight;
+               if (ilevel == 0.0) {
+                  uv0 = mapShinyUv(uv, ilevel2);
+                  uv1 = mapShinyUv(uv, ilevel2 + 1.0);
+                  weight = level2 - ilevel2;
+               }
+               else {
+                  uv0 = uv1 = mapRoughnessUv(uv, ilevel);
+                  weight = 0.0;
+               }
+               vec3 linearA = decodeRGBP(texture2D(texture_envAtlas, uv0));
+               vec3 linearB = decodeRGBP(texture2D(texture_envAtlas, uv1));
+               vec3 linear0 = mix(linearA, linearB, weight);
+               vec3 linear1 = decodeRGBP(texture2D(texture_envAtlas, mapRoughnessUv(uv, ilevel + 1.0)));
+               return processEnvironment(mix(linear0, linear1, level - ilevel));
+            }
+            void addReflection() {
+               dReflection += vec4(calcReflection(dReflDirW, dGlossiness), material_reflectivity);
+            }
+            vec2 getCubemapFaceCoordinates(const vec3 dir, out float faceIndex, out vec2 tileOffset) {
+               vec3 vAbs = abs(dir);
+               float ma;
+               vec2 uv;
+               if (vAbs.z >= vAbs.x && vAbs.z >= vAbs.y) {
+                  faceIndex = dir.z < 0.0 ? 5.0 : 4.0;
+                  ma = 0.5 / vAbs.z;
+                  uv = vec2(dir.z < 0.0 ? -dir.x : dir.x, -dir.y);
+                  tileOffset.x = 2.0;
+                  tileOffset.y = dir.z < 0.0 ? 1.0 : 0.0;
+               }
+               else if(vAbs.y >= vAbs.x) {
+                  faceIndex = dir.y < 0.0 ? 3.0 : 2.0;
+                  ma = 0.5 / vAbs.y;
+                  uv = vec2(dir.x, dir.y < 0.0 ? -dir.z : dir.z);
+                  tileOffset.x = 1.0;
+                  tileOffset.y = dir.y < 0.0 ? 1.0 : 0.0;
+               }
+               else {
+                  faceIndex = dir.x < 0.0 ? 1.0 : 0.0;
+                  ma = 0.5 / vAbs.x;
+                  uv = vec2(dir.x < 0.0 ? dir.z : -dir.z, -dir.y);
+                  tileOffset.x = 0.0;
+                  tileOffset.y = dir.x < 0.0 ? 1.0 : 0.0;
+               }
+               return uv * ma + 0.5;
+            }
+            vec2 getCubemapAtlasCoordinates(const vec3 omniAtlasViewport, float shadowEdgePixels, float shadowTextureResolution, const vec3 dir) {
+               float faceIndex;
+               vec2 tileOffset;
+               vec2 uv = getCubemapFaceCoordinates(dir, faceIndex, tileOffset);
+               float atlasFaceSize = omniAtlasViewport.z;
+               float tileSize = shadowTextureResolution * atlasFaceSize;
+               float offset = shadowEdgePixels / tileSize;
+               uv = uv * vec2(1.0 - offset * 2.0) + vec2(offset * 1.0);
+               uv *= atlasFaceSize;
+               uv += tileOffset * atlasFaceSize;
+               uv += omniAtlasViewport.xy;
+               return uv;
+            }
+            vec3 lessThan2(vec3 a, vec3 b) {
+               return clamp((b - a)*1000.0, 0.0, 1.0);
+            }
+            #define UNPACKFLOAT
+            float unpackFloat(vec4 rgbaDepth) {
+               const vec4 bitShift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);
+               return dot(rgbaDepth, bitShift);
+            }
+            float _getShadowPCF3x3(SHADOWMAP_ACCEPT(shadowMap), vec3 shadowParams) {
+               float z = dShadowCoord.z;
+               vec2 uv = dShadowCoord.xy * shadowParams.x;
+               float shadowMapSizeInv = 1.0 / shadowParams.x;
+               vec2 base_uv = floor(uv + 0.5);
+               float s = (uv.x + 0.5 - base_uv.x);
+               float t = (uv.y + 0.5 - base_uv.y);
+               base_uv -= vec2(0.5);
+               base_uv *= shadowMapSizeInv;
+               float sum = 0.0;
+               float uw0 = (3.0 - 2.0 * s);
+               float uw1 = (1.0 + 2.0 * s);
+               float u0 = (2.0 - s) / uw0 - 1.0;
+               float u1 = s / uw1 + 1.0;
+               float vw0 = (3.0 - 2.0 * t);
+               float vw1 = (1.0 + 2.0 * t);
+               float v0 = (2.0 - t) / vw0 - 1.0;
+               float v1 = t / vw1 + 1.0;
+               u0 = u0 * shadowMapSizeInv + base_uv.x;
+               v0 = v0 * shadowMapSizeInv + base_uv.y;
+               u1 = u1 * shadowMapSizeInv + base_uv.x;
+               v1 = v1 * shadowMapSizeInv + base_uv.y;
+               sum += uw0 * vw0 * textureShadow(shadowMap, vec3(u0, v0, z));
+               sum += uw1 * vw0 * textureShadow(shadowMap, vec3(u1, v0, z));
+               sum += uw0 * vw1 * textureShadow(shadowMap, vec3(u0, v1, z));
+               sum += uw1 * vw1 * textureShadow(shadowMap, vec3(u1, v1, z));
+               sum *= 1.0f / 16.0;
+               return sum;
+            }
+            float getShadowPCF3x3(SHADOWMAP_ACCEPT(shadowMap), vec3 shadowParams) {
+               return _getShadowPCF3x3(SHADOWMAP_PASS(shadowMap), shadowParams);
+            }
+            float getShadowSpotPCF3x3(SHADOWMAP_ACCEPT(shadowMap), vec4 shadowParams) {
+               return _getShadowPCF3x3(SHADOWMAP_PASS(shadowMap), shadowParams.xyz);
+            }
+            float _getShadowPoint(samplerCube shadowMap, vec4 shadowParams, vec3 dir) {
+               vec3 tc = normalize(dir);
+               vec3 tcAbs = abs(tc);
+               vec4 dirX = vec4(1, 0, 0, tc.x);
+               vec4 dirY = vec4(0, 1, 0, tc.y);
+               float majorAxisLength = tc.z;
+               if ((tcAbs.x > tcAbs.y) && (tcAbs.x > tcAbs.z)) {
+                  dirX = vec4(0, 0, 1, tc.z);
+                  dirY = vec4(0, 1, 0, tc.y);
+                  majorAxisLength = tc.x;
+               }
+               else if ((tcAbs.y > tcAbs.x) && (tcAbs.y > tcAbs.z)) {
+                  dirX = vec4(1, 0, 0, tc.x);
+                  dirY = vec4(0, 0, 1, tc.z);
+                  majorAxisLength = tc.y;
+               }
+               float shadowParamsInFaceSpace = ((1.0/shadowParams.x) * 2.0) * abs(majorAxisLength);
+               vec3 xoffset = (dirX.xyz * shadowParamsInFaceSpace);
+               vec3 yoffset = (dirY.xyz * shadowParamsInFaceSpace);
+               vec3 dx0 = -xoffset;
+               vec3 dy0 = -yoffset;
+               vec3 dx1 = xoffset;
+               vec3 dy1 = yoffset;
+               mat3 shadowKernel;
+               mat3 depthKernel;
+               depthKernel[0][0] = unpackFloat(textureCube(shadowMap, tc + dx0 + dy0));
+               depthKernel[0][1] = unpackFloat(textureCube(shadowMap, tc + dx0));
+               depthKernel[0][2] = unpackFloat(textureCube(shadowMap, tc + dx0 + dy1));
+               depthKernel[1][0] = unpackFloat(textureCube(shadowMap, tc + dy0));
+               depthKernel[1][1] = unpackFloat(textureCube(shadowMap, tc));
+               depthKernel[1][2] = unpackFloat(textureCube(shadowMap, tc + dy1));
+               depthKernel[2][0] = unpackFloat(textureCube(shadowMap, tc + dx1 + dy0));
+               depthKernel[2][1] = unpackFloat(textureCube(shadowMap, tc + dx1));
+               depthKernel[2][2] = unpackFloat(textureCube(shadowMap, tc + dx1 + dy1));
+               vec3 shadowZ = vec3(length(dir) * shadowParams.w + shadowParams.z);
+               shadowKernel[0] = vec3(lessThan2(depthKernel[0], shadowZ));
+               shadowKernel[1] = vec3(lessThan2(depthKernel[1], shadowZ));
+               shadowKernel[2] = vec3(lessThan2(depthKernel[2], shadowZ));
+               vec2 uv = (vec2(dirX.w, dirY.w) / abs(majorAxisLength)) * 0.5;
+               vec2 fractionalCoord = fract( uv * shadowParams.x );
+               shadowKernel[0] = mix(shadowKernel[0], shadowKernel[1], fractionalCoord.x);
+               shadowKernel[1] = mix(shadowKernel[1], shadowKernel[2], fractionalCoord.x);
+               vec4 shadowValues;
+               shadowValues.x = mix(shadowKernel[0][0], shadowKernel[0][1], fractionalCoord.y);
+               shadowValues.y = mix(shadowKernel[0][1], shadowKernel[0][2], fractionalCoord.y);
+               shadowValues.z = mix(shadowKernel[1][0], shadowKernel[1][1], fractionalCoord.y);
+               shadowValues.w = mix(shadowKernel[1][1], shadowKernel[1][2], fractionalCoord.y);
+               return 1.0 - dot( shadowValues, vec4( 1.0 ) ) * 0.25;
+            }
+            float getShadowPointPCF3x3(samplerCube shadowMap, vec4 shadowParams) {
+               return _getShadowPoint(shadowMap, shadowParams, dLightDirW);
+            }
+            float _getShadowPCF5x5(SHADOWMAP_ACCEPT(shadowMap), vec3 shadowParams) {
+               float z = dShadowCoord.z;
+               vec2 uv = dShadowCoord.xy * shadowParams.x;
+               float shadowMapSizeInv = 1.0 / shadowParams.x;
+               vec2 base_uv = floor(uv + 0.5);
+               float s = (uv.x + 0.5 - base_uv.x);
+               float t = (uv.y + 0.5 - base_uv.y);
+               base_uv -= vec2(0.5);
+               base_uv *= shadowMapSizeInv;
+               float uw0 = (4.0 - 3.0 * s);
+               float uw1 = 7.0;
+               float uw2 = (1.0 + 3.0 * s);
+               float u0 = (3.0 - 2.0 * s) / uw0 - 2.0;
+               float u1 = (3.0 + s) / uw1;
+               float u2 = s / uw2 + 2.0;
+               float vw0 = (4.0 - 3.0 * t);
+               float vw1 = 7.0;
+               float vw2 = (1.0 + 3.0 * t);
+               float v0 = (3.0 - 2.0 * t) / vw0 - 2.0;
+               float v1 = (3.0 + t) / vw1;
+               float v2 = t / vw2 + 2.0;
+               float sum = 0.0;
+               u0 = u0 * shadowMapSizeInv + base_uv.x;
+               v0 = v0 * shadowMapSizeInv + base_uv.y;
+               u1 = u1 * shadowMapSizeInv + base_uv.x;
+               v1 = v1 * shadowMapSizeInv + base_uv.y;
+               u2 = u2 * shadowMapSizeInv + base_uv.x;
+               v2 = v2 * shadowMapSizeInv + base_uv.y;
+               sum += uw0 * vw0 * textureShadow(shadowMap, vec3(u0, v0, z));
+               sum += uw1 * vw0 * textureShadow(shadowMap, vec3(u1, v0, z));
+               sum += uw2 * vw0 * textureShadow(shadowMap, vec3(u2, v0, z));
+               sum += uw0 * vw1 * textureShadow(shadowMap, vec3(u0, v1, z));
+               sum += uw1 * vw1 * textureShadow(shadowMap, vec3(u1, v1, z));
+               sum += uw2 * vw1 * textureShadow(shadowMap, vec3(u2, v1, z));
+               sum += uw0 * vw2 * textureShadow(shadowMap, vec3(u0, v2, z));
+               sum += uw1 * vw2 * textureShadow(shadowMap, vec3(u1, v2, z));
+               sum += uw2 * vw2 * textureShadow(shadowMap, vec3(u2, v2, z));
+               sum *= 1.0f / 144.0;
+               sum = saturate(sum);
+               return sum;
+            }
+            float getShadowPCF5x5(SHADOWMAP_ACCEPT(shadowMap), vec3 shadowParams) {
+               return _getShadowPCF5x5(SHADOWMAP_PASS(shadowMap), shadowParams);
+            }
+            float getShadowSpotPCF5x5(SHADOWMAP_ACCEPT(shadowMap), vec4 shadowParams) {
+               return _getShadowPCF5x5(SHADOWMAP_PASS(shadowMap), shadowParams.xyz);
+            }
+            void _getShadowCoordOrtho(mat4 shadowMatrix, vec3 shadowParams, vec3 wPos) {
+               dShadowCoord = (shadowMatrix * vec4(wPos, 1.0)).xyz;
+               dShadowCoord.z = saturate(dShadowCoord.z) - 0.0001;
+            }
+            void _getShadowCoordPersp(mat4 shadowMatrix, vec4 shadowParams, vec3 wPos) {
+               vec4 projPos = shadowMatrix * vec4(wPos, 1.0);
+               projPos.xy /= projPos.w;
+               dShadowCoord.xy = projPos.xy;
+               dShadowCoord.z = length(dLightDirW) * shadowParams.w;
+            }
+            void getShadowCoordOrtho(mat4 shadowMatrix, vec3 shadowParams) {
+               _getShadowCoordOrtho(shadowMatrix, shadowParams, vPositionW);
+            }
+            void getShadowCoordPersp(mat4 shadowMatrix, vec4 shadowParams) {
+               _getShadowCoordPersp(shadowMatrix, shadowParams, vPositionW);
+            }
+            void getShadowCoordPerspNormalOffset(mat4 shadowMatrix, vec4 shadowParams) {
+               float distScale = abs(dot(vPositionW - dLightPosW, dLightDirNormW));
+               vec3 wPos = vPositionW + dVertexNormalW * shadowParams.y * clamp(1.0 - dot(dVertexNormalW, -dLightDirNormW), 0.0, 1.0) * distScale;
+               _getShadowCoordPersp(shadowMatrix, shadowParams, wPos);
+            }
+            void getShadowCoordOrthoNormalOffset(mat4 shadowMatrix, vec3 shadowParams) {
+               vec3 wPos = vPositionW + dVertexNormalW * shadowParams.y * clamp(1.0 - dot(dVertexNormalW, -dLightDirNormW), 0.0, 1.0);
+               _getShadowCoordOrtho(shadowMatrix, shadowParams, wPos);
+            }
+            void normalOffsetPointShadow(vec4 shadowParams) {
+               float distScale = length(dLightDirW);
+               vec3 wPos = vPositionW + dVertexNormalW * shadowParams.y * clamp(1.0 - dot(dVertexNormalW, -dLightDirNormW), 0.0, 1.0) * distScale;
+               vec3 dir = wPos - dLightPosW;
+               dLightDirW = dir;
+            }
+            void _getShadowCoordPerspZbuffer(mat4 shadowMatrix, vec4 shadowParams, vec3 wPos) {
+               vec4 projPos = shadowMatrix * vec4(wPos, 1.0);
+               projPos.xyz /= projPos.w;
+               dShadowCoord = projPos.xyz;
+            }
+            void getShadowCoordPerspZbufferNormalOffset(mat4 shadowMatrix, vec4 shadowParams) {
+               vec3 wPos = vPositionW + dVertexNormalW * shadowParams.y;
+               _getShadowCoordPerspZbuffer(shadowMatrix, shadowParams, wPos);
+            }
+            void getShadowCoordPerspZbuffer(mat4 shadowMatrix, vec4 shadowParams) {
+               _getShadowCoordPerspZbuffer(shadowMatrix, shadowParams, vPositionW);
+            }
+            float getLightDiffuse() {
+               return max(dot(dNormalW, -dLightDirNormW), 0.0);
+            }
+            mat3 transposeMat3( const in mat3 m ) {
+               mat3 tmp;
+               tmp[ 0 ] = vec3( m[ 0 ].x, m[ 1 ].x, m[ 2 ].x );
+               tmp[ 1 ] = vec3( m[ 0 ].y, m[ 1 ].y, m[ 2 ].y );
+               tmp[ 2 ] = vec3( m[ 0 ].z, m[ 1 ].z, m[ 2 ].z );
+               return tmp;
+            }
+            vec2 LTC_Uv( const in vec3 N, const in vec3 V, const in float roughness ) {
+               const float LUT_SIZE = 64.0;
+               const float LUT_SCALE = ( LUT_SIZE - 1.0 ) / LUT_SIZE;
+               const float LUT_BIAS = 0.5 / LUT_SIZE;
+               float dotNV = saturate( dot( N, V ) );
+               vec2 uv = vec2( roughness, sqrt( 1.0 - dotNV ) );
+               uv = uv * LUT_SCALE + LUT_BIAS;
+               return uv;
+            }
+            float LTC_ClippedSphereFormFactor( const in vec3 f ) {
+               float l = length( f );
+               return max( ( l * l + f.z ) / ( l + 1.0 ), 0.0 );
+            }
+            vec3 LTC_EdgeVectorFormFactor( const in vec3 v1, const in vec3 v2 ) {
+               float x = dot( v1, v2 );
+               float y = abs( x );
+               float a = 0.8543985 + ( 0.4965155 + 0.0145206 * y ) * y;
+               float b = 3.4175940 + ( 4.1616724 + y ) * y;
+               float v = a / b;
+               float theta_sintheta = ( x > 0.0 ) ? v : 0.5 * inversesqrt( max( 1.0 - x * x, 1e-7 ) ) - v;
+               return cross( v1, v2 ) * theta_sintheta;
+            }
+            struct Coords {
+               vec3 coord0;
+               vec3 coord1;
+               vec3 coord2;
+               vec3 coord3;
+            };
+            float LTC_EvaluateRect( const in vec3 N, const in vec3 V, const in vec3 P, const in mat3 mInv, const in Coords rectCoords) {
+               vec3 v1 = rectCoords.coord1 - rectCoords.coord0;
+               vec3 v2 = rectCoords.coord3 - rectCoords.coord0;
+               vec3 lightNormal = cross( v1, v2 );
+               float factor = sign(-dot( lightNormal, P - rectCoords.coord0 ));
+               vec3 T1, T2;
+               T1 = normalize( V - N * dot( V, N ) );
+               T2 = factor * cross( N, T1 );
+               mat3 mat = mInv * transposeMat3( mat3( T1, T2, N ) );
+               vec3 coords[ 4 ];
+               coords[ 0 ] = mat * ( rectCoords.coord0 - P );
+               coords[ 1 ] = mat * ( rectCoords.coord1 - P );
+               coords[ 2 ] = mat * ( rectCoords.coord2 - P );
+               coords[ 3 ] = mat * ( rectCoords.coord3 - P );
+               coords[ 0 ] = normalize( coords[ 0 ] );
+               coords[ 1 ] = normalize( coords[ 1 ] );
+               coords[ 2 ] = normalize( coords[ 2 ] );
+               coords[ 3 ] = normalize( coords[ 3 ] );
+               vec3 vectorFormFactor = vec3( 0.0 );
+               vectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 0 ], coords[ 1 ] );
+               vectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 1 ], coords[ 2 ] );
+               vectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 2 ], coords[ 3 ] );
+               vectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 3 ], coords[ 0 ] );
+               float result = LTC_ClippedSphereFormFactor( vectorFormFactor );
+               return result;
+            }
+            Coords dLTCCoords;
+            Coords getLTCLightCoords(vec3 lightPos, vec3 halfWidth, vec3 halfHeight) {
+               Coords coords;
+               coords.coord0 = lightPos + halfWidth - halfHeight;
+               coords.coord1 = lightPos - halfWidth - halfHeight;
+               coords.coord2 = lightPos - halfWidth + halfHeight;
+               coords.coord3 = lightPos + halfWidth + halfHeight;
+               return coords;
+            }
+            float dSphereRadius;
+            Coords getSphereLightCoords(vec3 lightPos, vec3 halfWidth, vec3 halfHeight) {
+               dSphereRadius = max(length(halfWidth), length(halfHeight));
+               vec3 f = reflect(normalize(lightPos - view_position), vNormalW);
+               vec3 w = normalize(cross(f, halfHeight));
+               vec3 h = normalize(cross(f, w));
+               return getLTCLightCoords(lightPos, w * dSphereRadius, h * dSphereRadius);
+            }
+            vec2 dLTCUV;
+            vec2 getLTCLightUV(float tGlossiness, vec3 tNormalW) {
+               float roughness = max((1.0 - tGlossiness) * (1.0 - tGlossiness), 0.001);
+               return LTC_Uv( tNormalW, dViewDirW, roughness );
+            }
+            vec3 dLTCSpecFres;
+            vec3 getLTCLightSpecFres(vec2 uv, vec3 tSpecularity) {
+               vec4 t2 = texture2DLodEXT(areaLightsLutTex2, uv, 0.0);
+               return tSpecularity * t2.x + ( vec3( 1.0 ) - tSpecularity) * t2.y;
+            }
+            void calcLTCLightValues() {
+               dLTCUV = getLTCLightUV(dGlossiness, dNormalW);
+               dLTCSpecFres = getLTCLightSpecFres(dLTCUV, dSpecularity);
+            }
+            void calcRectLightValues(vec3 lightPos, vec3 halfWidth, vec3 halfHeight) {
+               dLTCCoords = getLTCLightCoords(lightPos, halfWidth, halfHeight);
+            }
+            void calcDiskLightValues(vec3 lightPos, vec3 halfWidth, vec3 halfHeight) {
+               calcRectLightValues(lightPos, halfWidth, halfHeight);
+            }
+            void calcSphereLightValues(vec3 lightPos, vec3 halfWidth, vec3 halfHeight) {
+               dLTCCoords = getSphereLightCoords(lightPos, halfWidth, halfHeight);
+            }
+            vec3 SolveCubic(vec4 Coefficient) {
+               float pi = 3.14159;
+               Coefficient.xyz /= Coefficient.w;
+               Coefficient.yz /= 3.0;
+               float A = Coefficient.w;
+               float B = Coefficient.z;
+               float C = Coefficient.y;
+               float D = Coefficient.x;
+               vec3 Delta = vec3(
+               -Coefficient.z * Coefficient.z + Coefficient.y, -Coefficient.y * Coefficient.z + Coefficient.x, dot(vec2(Coefficient.z, -Coefficient.y), Coefficient.xy)
+               );
+               float Discriminant = dot(vec2(4.0 * Delta.x, -Delta.y), Delta.zy);
+               vec3 RootsA, RootsD;
+               vec2 xlc, xsc; {
+                  float A_a = 1.0;
+                  float C_a = Delta.x;
+                  float D_a = -2.0 * B * Delta.x + Delta.y;
+                  float Theta = atan(sqrt(Discriminant), -D_a) / 3.0;
+                  float x_1a = 2.0 * sqrt(-C_a) * cos(Theta);
+                  float x_3a = 2.0 * sqrt(-C_a) * cos(Theta + (2.0 / 3.0) * pi);
+                  float xl;
+                  if ((x_1a + x_3a) > 2.0 * B)
+                  xl = x_1a;
+                  else
+                  xl = x_3a;
+                  xlc = vec2(xl - B, A);
+               }
+            {
+                  float A_d = D;
+                  float C_d = Delta.z;
+                  float D_d = -D * Delta.y + 2.0 * C * Delta.z;
+                  float Theta = atan(D * sqrt(Discriminant), -D_d) / 3.0;
+                  float x_1d = 2.0 * sqrt(-C_d) * cos(Theta);
+                  float x_3d = 2.0 * sqrt(-C_d) * cos(Theta + (2.0 / 3.0) * pi);
+                  float xs;
+                  if (x_1d + x_3d < 2.0 * C)
+                  xs = x_1d;
+                  else
+                  xs = x_3d;
+                  xsc = vec2(-D, xs + C);
+               }
+               float E = xlc.y * xsc.y;
+               float F = -xlc.x * xsc.y - xlc.y * xsc.x;
+               float G = xlc.x * xsc.x;
+               vec2 xmc = vec2(C * F - B * G, -B * F + C * E);
+               vec3 Root = vec3(xsc.x / xsc.y, xmc.x / xmc.y, xlc.x / xlc.y);
+               if (Root.x < Root.y && Root.x < Root.z)
+               Root.xyz = Root.yxz;
+               else if (Root.z < Root.x && Root.z < Root.y)
+               Root.xyz = Root.xzy;
+               return Root;
+            }
+            float LTC_EvaluateDisk(vec3 N, vec3 V, vec3 P, mat3 Minv, Coords points) {
+               vec3 T1, T2;
+               T1 = normalize(V - N * dot(V, N));
+               T2 = cross(N, T1);
+               mat3 R = transposeMat3( mat3( T1, T2, N ) );
+               vec3 L_[ 3 ];
+               L_[ 0 ] = R * ( points.coord0 - P );
+               L_[ 1 ] = R * ( points.coord1 - P );
+               L_[ 2 ] = R * ( points.coord2 - P );
+               vec3 Lo_i = vec3(0);
+               vec3 C = 0.5 * (L_[0] + L_[2]);
+               vec3 V1 = 0.5 * (L_[1] - L_[2]);
+               vec3 V2 = 0.5 * (L_[1] - L_[0]);
+               C = Minv * C;
+               V1 = Minv * V1;
+               V2 = Minv * V2;
+               float a, b;
+               float d11 = dot(V1, V1);
+               float d22 = dot(V2, V2);
+               float d12 = dot(V1, V2);
+               if (abs(d12) / sqrt(d11 * d22) > 0.0001) {
+                  float tr = d11 + d22;
+                  float det = -d12 * d12 + d11 * d22;
+                  det = sqrt(det);
+                  float u = 0.5 * sqrt(tr - 2.0 * det);
+                  float v = 0.5 * sqrt(tr + 2.0 * det);
+                  float e_max = (u + v) * (u + v);
+                  float e_min = (u - v) * (u - v);
+                  vec3 V1_, V2_;
+                  if (d11 > d22) {
+                        V1_ = d12 * V1 + (e_max - d11) * V2;
+                        V2_ = d12 * V1 + (e_min - d11) * V2;
+                  }
+                  else {
+                        V1_ = d12*V2 + (e_max - d22)*V1;
+                        V2_ = d12*V2 + (e_min - d22)*V1;
+                  }
+                  a = 1.0 / e_max;
+                  b = 1.0 / e_min;
+                  V1 = normalize(V1_);
+                  V2 = normalize(V2_);
+               }
+               else {
+                  a = 1.0 / dot(V1, V1);
+                  b = 1.0 / dot(V2, V2);
+                  V1 *= sqrt(a);
+                  V2 *= sqrt(b);
+               }
+               vec3 V3 = cross(V1, V2);
+               if (dot(C, V3) < 0.0)
+               V3 *= -1.0;
+               float L = dot(V3, C);
+               float x0 = dot(V1, C) / L;
+               float y0 = dot(V2, C) / L;
+               float E1 = inversesqrt(a);
+               float E2 = inversesqrt(b);
+               a *= L * L;
+               b *= L * L;
+               float c0 = a * b;
+               float c1 = a * b * (1.0 + x0 * x0 + y0 * y0) - a - b;
+               float c2 = 1.0 - a * (1.0 + x0 * x0) - b * (1.0 + y0 * y0);
+               float c3 = 1.0;
+               vec3 roots = SolveCubic(vec4(c0, c1, c2, c3));
+               float e1 = roots.x;
+               float e2 = roots.y;
+               float e3 = roots.z;
+               vec3 avgDir = vec3(a * x0 / (a - e2), b * y0 / (b - e2), 1.0);
+               mat3 rotate = mat3(V1, V2, V3);
+               avgDir = rotate * avgDir;
+               avgDir = normalize(avgDir);
+               float L1 = sqrt(-e2 / e3);
+               float L2 = sqrt(-e2 / e1);
+               float formFactor = L1 * L2 * inversesqrt((1.0 + L1 * L1) * (1.0 + L2 * L2));
+               const float LUT_SIZE = 64.0;
+               const float LUT_SCALE = ( LUT_SIZE - 1.0 ) / LUT_SIZE;
+               const float LUT_BIAS = 0.5 / LUT_SIZE;
+               vec2 uv = vec2(avgDir.z * 0.5 + 0.5, formFactor);
+               uv = uv*LUT_SCALE + LUT_BIAS;
+               float scale = texture2DLodEXT(areaLightsLutTex2, uv, 0.0).w;
+               return formFactor*scale;
+            }
+            float getRectLightDiffuse() {
+               return LTC_EvaluateRect( dNormalW, dViewDirW, vPositionW, mat3( 1.0 ), dLTCCoords );
+            }
+            float getDiskLightDiffuse() {
+               return LTC_EvaluateDisk( dNormalW, dViewDirW, vPositionW, mat3( 1.0 ), dLTCCoords );
+            }
+            float getSphereLightDiffuse() {
+               float falloff = dSphereRadius / (dot(dLightDirW, dLightDirW) + dSphereRadius);
+               return getLightDiffuse()*falloff;
+            }
+            mat3 getLTCLightInvMat(vec2 uv) {
+               vec4 t1 = texture2DLodEXT(areaLightsLutTex1, uv, 0.0);
+               return mat3(
+               vec3( t1.x, 0, t1.y ), vec3(    0, 1, 0 ), vec3( t1.z, 0, t1.w )
+               );
+            }
+            float calcRectLightSpecular(vec3 tNormalW, vec2 uv) {
+               mat3 mInv = getLTCLightInvMat(uv);
+               return LTC_EvaluateRect( tNormalW, dViewDirW, vPositionW, mInv, dLTCCoords );
+            }
+            float getRectLightSpecular() {
+               return calcRectLightSpecular(dNormalW, dLTCUV);
+            }
+            float calcDiskLightSpecular(vec3 tNormalW, vec2 uv) {
+               mat3 mInv = getLTCLightInvMat(uv);
+               return LTC_EvaluateDisk( tNormalW, dViewDirW, vPositionW, mInv, dLTCCoords );
+            }
+            float getDiskLightSpecular() {
+               return calcDiskLightSpecular(dNormalW, dLTCUV);
+            }
+            float getSphereLightSpecular() {
+               return calcDiskLightSpecular(dNormalW, dLTCUV);
+            }
+            float calcLightSpecular(float tGlossiness, vec3 tNormalW, vec3 h) {
+               float nh = max( dot( h, tNormalW ), 0.0 );
+               float specPow = exp2(tGlossiness * 11.0);
+               specPow = max(specPow, 0.0001);
+               return pow(nh, specPow) * (specPow + 2.0) / 8.0;
+            }
+            float getLightSpecular(vec3 h) {
+               return calcLightSpecular(dGlossiness, dNormalW, h);
+            }
+            vec3 combineColor() {
+               vec3 ret = vec3(0);
+               ret += dAlbedo * dDiffuseLight;
+               ret += dSpecularLight;
+               ret += dReflection.rgb * dReflection.a;
+               return ret;
+            }
+            void addAmbient() {
+               vec3 dir = normalize(cubeMapRotate(dNormalW) * vec3(-1.0, 1.0, 1.0));
+               vec2 uv = mapUv(toSphericalUv(dir), vec4(128.0, 256.0 + 128.0, 64.0, 32.0) / atlasSize);
+               vec4 raw = texture2D(texture_envAtlas, uv);
+               vec3 linear = decodeRGBP(raw);
+               dDiffuseLight += processEnvironment(linear);
+            }
+            void getViewDir() {
+               dViewDirW = normalize(view_position - vPositionW);
+            }
+            void getReflDir() {
+               dReflDirW = normalize(-reflect(dViewDirW, dNormalW));
+            }
+            float bytes2float2(vec2 data) {
+               return dot(data, vec2(1.0, 1.0 / 255.0));
+            }
+            float bytes2float3(vec3 data) {
+               return dot(data, vec3(1.0, 1.0 / 255.0, 1.0 / 65025.0));
+            }
+            float bytes2float4(vec4 data) {
+               return dot(data, vec4(1.0, 1.0 / 255.0, 1.0 / 65025.0, 1.0 / 16581375.0));
+            }
+            float bytes2floatRange2(vec2 data, float min, float max) {
+               return mix(min, max, bytes2float2(data));
+            }
+            float bytes2floatRange3(vec3 data, float min, float max) {
+               return mix(min, max, bytes2float3(data));
+            }
+            float bytes2floatRange4(vec4 data, float min, float max) {
+               return mix(min, max, bytes2float4(data));
+            }
+            float mantissaExponent2Float(vec4 pack) {
+               float value = bytes2floatRange3(pack.xyz, -1.0, 1.0);
+               float exponent = floor(pack.w * 255.0 - 127.0);
+               return value * exp2(exponent);
+            }
+            #define CLUSTER_MESH_DYNAMIC_LIGHTS
+            #define CLUSTER_SHADOWS
+            #define CLUSTER_SHADOW_TYPE_PCF3
+            #define CLUSTER_AREALIGHTS
+
+            #define CLUSTER_TEXTURE_FLOAT
+
+            #define CLUSTER_TEXTURE_8_FLAGS 0
+            #define CLUSTER_TEXTURE_8_COLOR_A 1
+            #define CLUSTER_TEXTURE_8_COLOR_B 2
+            #define CLUSTER_TEXTURE_8_SPOT_ANGLES 3
+            #define CLUSTER_TEXTURE_8_SHADOW_BIAS 4
+            #define CLUSTER_TEXTURE_8_COOKIE_A 5
+            #define CLUSTER_TEXTURE_8_COOKIE_B 6
+            #define CLUSTER_TEXTURE_8_COUNT_ALWAYS 7
+            #define CLUSTER_TEXTURE_8_POSITION_X 7
+            #define CLUSTER_TEXTURE_8_POSITION_Y 8
+            #define CLUSTER_TEXTURE_8_POSITION_Z 9
+            #define CLUSTER_TEXTURE_8_RANGE 10
+            #define CLUSTER_TEXTURE_8_SPOT_DIRECTION_X 11
+            #define CLUSTER_TEXTURE_8_SPOT_DIRECTION_Y 12
+            #define CLUSTER_TEXTURE_8_SPOT_DIRECTION_Z 13
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_00 14
+            #define CLUSTER_TEXTURE_8_ATLAS_VIEWPORT_A 14
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_01 15
+            #define CLUSTER_TEXTURE_8_ATLAS_VIEWPORT_B 15
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_02 16
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_03 17
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_10 18
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_11 19
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_12 20
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_13 21
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_20 22
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_21 23
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_22 24
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_23 25
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_30 26
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_31 27
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_32 28
+            #define CLUSTER_TEXTURE_8_PROJ_MAT_33 29
+            #define CLUSTER_TEXTURE_8_AREA_DATA_WIDTH_X 30
+            #define CLUSTER_TEXTURE_8_AREA_DATA_WIDTH_Y 31
+            #define CLUSTER_TEXTURE_8_AREA_DATA_WIDTH_Z 32
+            #define CLUSTER_TEXTURE_8_AREA_DATA_HEIGHT_X 33
+            #define CLUSTER_TEXTURE_8_AREA_DATA_HEIGHT_Y 34
+            #define CLUSTER_TEXTURE_8_AREA_DATA_HEIGHT_Z 35
+            #define CLUSTER_TEXTURE_8_COUNT 36
+
+            #define CLUSTER_TEXTURE_F_POSITION_RANGE 0
+            #define CLUSTER_TEXTURE_F_SPOT_DIRECTION 1
+            #define CLUSTER_TEXTURE_F_PROJ_MAT_0 2
+            #define CLUSTER_TEXTURE_F_ATLAS_VIEWPORT 2
+            #define CLUSTER_TEXTURE_F_PROJ_MAT_1 3
+            #define CLUSTER_TEXTURE_F_PROJ_MAT_2 4
+            #define CLUSTER_TEXTURE_F_PROJ_MAT_3 5
+            #define CLUSTER_TEXTURE_F_AREA_DATA_WIDTH 6
+            #define CLUSTER_TEXTURE_F_AREA_DATA_HEIGHT 7
+            #define CLUSTER_TEXTURE_F_COUNT 8
+
+
+            float getShadowOmniClusteredPCF3(sampler2DShadow shadowMap, vec4 shadowParams, vec3 omniAtlasViewport, float shadowEdgePixels, vec3 dir) {
+               float shadowTextureResolution = shadowParams.x;
+               vec2 uv = getCubemapAtlasCoordinates(omniAtlasViewport, shadowEdgePixels, shadowTextureResolution, dir);
+               float shadowZ = length(dir) * shadowParams.w + shadowParams.z;
+               dShadowCoord = vec3(uv, shadowZ);
+               return getShadowPCF3x3(shadowMap, shadowParams.xyz);
+            }
+            float getShadowSpotClusteredPCF3(sampler2DShadow shadowMap, vec4 shadowParams) {
+               return getShadowSpotPCF3x3(shadowMap, shadowParams);
+            }
+            uniform sampler2D clusterWorldTexture;
+            uniform sampler2D lightsTexture8;
+            uniform highp sampler2D lightsTextureFloat;
+            #define CLUSTER_COOKIES_OR_SHADOWS
+
+            uniform sampler2DShadow shadowAtlasTexture;
+            uniform int clusterMaxCells;
+            uniform float clusterPixelsPerCell;
+            uniform vec3 clusterCellsCountByBoundsSize;
+            uniform vec3 clusterTextureSize;
+            uniform vec3 clusterBoundsMin;
+            uniform vec3 clusterBoundsDelta;
+            uniform vec3 clusterCellsDot;
+            uniform vec3 clusterCellsMax;
+            uniform vec2 clusterCompressionLimit0;
+            uniform vec2 shadowAtlasParams;
+            struct ClusterLightData {
+               int lightIndex;
+               float type;
+               float shape;
+               vec3 halfWidth;
+               vec3 halfHeight;
+               float falloffMode;
+               float shadowIntensity;
+               float shadowBias;
+               float shadowNormalBias;
+               vec3 position;
+               vec3 direction;
+               float range;
+               float innerConeAngleCos;
+               float outerConeAngleCos;
+               vec3 color;
+               vec3 omniAtlasViewport;
+               float cookie;
+               float cookieRgb;
+               float cookieIntensity;
+               vec4 cookieChannelMask;
+               float mask;
+            };
+            mat4 lightProjectionMatrix;
+            #define isClusteredLightCastShadow(light) ( light.shadowIntensity > 0.0 )
+            #define isClusteredLightCookie(light) (light.cookie > 0.5 )
+            #define isClusteredLightCookieRgb(light) (light.cookieRgb > 0.5 )
+            #define isClusteredLightSpot(light) ( light.type > 0.5 )
+            #define isClusteredLightFalloffLinear(light) ( light.falloffMode < 0.5 )
+            #define isClusteredLightArea(light) ( light.shape > 0.1 )
+            #define isClusteredLightRect(light) ( light.shape < 0.3 )
+            #define isClusteredLightDisk(light) ( light.shape < 0.6 )
+            #define acceptLightMask(light) ( light.mask < 0.75)
+
+            vec4 decodeClusterLowRange4Vec4(vec4 d0, vec4 d1, vec4 d2, vec4 d3) {
+               return vec4(
+               bytes2floatRange4(d0, -2.0, 2.0), bytes2floatRange4(d1, -2.0, 2.0), bytes2floatRange4(d2, -2.0, 2.0), bytes2floatRange4(d3, -2.0, 2.0)
+               );
+            }
+            vec4 sampleLightsTexture8(const ClusterLightData clusterLightData, int index) {
+               return texelFetch(lightsTexture8, ivec2(index, clusterLightData.lightIndex), 0);
+            }
+            vec4 sampleLightTextureF(const ClusterLightData clusterLightData, int index) {
+               return texelFetch(lightsTextureFloat, ivec2(index, clusterLightData.lightIndex), 0);
+            }
+            void decodeClusterLightCore(inout ClusterLightData clusterLightData, float lightIndex) {
+               clusterLightData.lightIndex = int(lightIndex);
+               vec4 lightInfo = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_FLAGS);
+               clusterLightData.type = lightInfo.x;
+               clusterLightData.shape = lightInfo.y;
+               clusterLightData.falloffMode = lightInfo.z;
+               clusterLightData.shadowIntensity = lightInfo.w;
+               vec4 colorA = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_COLOR_A);
+               vec4 colorB = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_COLOR_B);
+               clusterLightData.color = vec3(bytes2float2(colorA.xy), bytes2float2(colorA.zw), bytes2float2(colorB.xy)) * clusterCompressionLimit0.y;
+               clusterLightData.cookie = colorB.z;
+               clusterLightData.mask = colorB.w;
+               vec4 lightPosRange = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_POSITION_RANGE);
+               clusterLightData.position = lightPosRange.xyz;
+               clusterLightData.range = lightPosRange.w;
+               vec4 lightDir_Unused = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_SPOT_DIRECTION);
+               clusterLightData.direction = lightDir_Unused.xyz;
+            }
+            void decodeClusterLightSpot(inout ClusterLightData clusterLightData) {
+               vec4 coneAngle = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_SPOT_ANGLES);
+               clusterLightData.innerConeAngleCos = bytes2float2(coneAngle.xy) * 2.0 - 1.0;
+               clusterLightData.outerConeAngleCos = bytes2float2(coneAngle.zw) * 2.0 - 1.0;
+            }
+            void decodeClusterLightOmniAtlasViewport(inout ClusterLightData clusterLightData) {
+               clusterLightData.omniAtlasViewport = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_PROJ_MAT_0).xyz;
+            }
+            void decodeClusterLightAreaData(inout ClusterLightData clusterLightData) {
+               clusterLightData.halfWidth = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_AREA_DATA_WIDTH).xyz;
+               clusterLightData.halfHeight = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_AREA_DATA_HEIGHT).xyz;
+            }
+            void decodeClusterLightProjectionMatrixData(inout ClusterLightData clusterLightData) {
+               vec4 m0 = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_PROJ_MAT_0);
+               vec4 m1 = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_PROJ_MAT_1);
+               vec4 m2 = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_PROJ_MAT_2);
+               vec4 m3 = sampleLightTextureF(clusterLightData, CLUSTER_TEXTURE_F_PROJ_MAT_3);
+               lightProjectionMatrix = mat4(m0, m1, m2, m3);
+            }
+            void decodeClusterLightShadowData(inout ClusterLightData clusterLightData) {
+               vec4 biases = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_SHADOW_BIAS);
+               clusterLightData.shadowBias = bytes2floatRange2(biases.xy, -1.0, 20.0), clusterLightData.shadowNormalBias = bytes2float2(biases.zw);
+            }
+            void decodeClusterLightCookieData(inout ClusterLightData clusterLightData) {
+               vec4 cookieA = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_COOKIE_A);
+               clusterLightData.cookieIntensity = cookieA.x;
+               clusterLightData.cookieRgb = cookieA.y;
+               clusterLightData.cookieChannelMask = sampleLightsTexture8(clusterLightData, CLUSTER_TEXTURE_8_COOKIE_B);
+            }
+            void evaluateLight(ClusterLightData light) {
+               dAtten3 = vec3(1.0);
+               getLightDirPoint(light.position);
+               if (isClusteredLightArea(light)) {
+                  decodeClusterLightAreaData(light);
+                  if (isClusteredLightRect(light)) {
+                        calcRectLightValues(light.position, light.halfWidth, light.halfHeight);
+                  }
+                  else if (isClusteredLightDisk(light)) {
+                        calcDiskLightValues(light.position, light.halfWidth, light.halfHeight);
+                  }
+                  else {
+                        calcSphereLightValues(light.position, light.halfWidth, light.halfHeight);
+                  }
+                  dAtten = getFalloffWindow(light.range);
+               }
+               else {
+                  if (isClusteredLightFalloffLinear(light))
+                  dAtten = getFalloffLinear(light.range);
+                  else
+                  dAtten = getFalloffInvSquared(light.range);
+               }
+               if (dAtten > 0.00001) {
+                  if (isClusteredLightArea(light)) {
+                        if (isClusteredLightRect(light)) {
+                           dAttenD = getRectLightDiffuse() * 16.0;
+                        }
+                        else if (isClusteredLightDisk(light)) {
+                           dAttenD = getDiskLightDiffuse() * 16.0;
+                        }
+                        else {
+                           dAttenD = getSphereLightDiffuse() * 16.0;
+                        }
+                  }
+                  else {
+                        dAtten *= getLightDiffuse();
+                  }
+                  if (isClusteredLightSpot(light)) {
+                        decodeClusterLightSpot(light);
+                        dAtten *= getSpotEffect(light.direction, light.innerConeAngleCos, light.outerConeAngleCos);
+                  }
+                  if (dAtten > 0.00001) {
+                        if (isClusteredLightCastShadow(light) || isClusteredLightCookie(light)) {
+                           if (isClusteredLightSpot(light)) {
+                              decodeClusterLightProjectionMatrixData(light);
+                           }
+                           else {
+                              decodeClusterLightOmniAtlasViewport(light);
+                           }
+                           float shadowTextureResolution = shadowAtlasParams.x;
+                           float shadowEdgePixels = shadowAtlasParams.y;
+                           if (isClusteredLightCastShadow(light)) {
+                              decodeClusterLightShadowData(light);
+                              vec4 shadowParams = vec4(shadowTextureResolution, light.shadowNormalBias, light.shadowBias, 1.0 / light.range);
+                              if (isClusteredLightSpot(light)) {
+                                    getShadowCoordPerspZbufferNormalOffset(lightProjectionMatrix, shadowParams);
+                                    float shadow = getShadowSpotClusteredPCF3(shadowAtlasTexture, shadowParams);
+                                    dAtten *= mix(1.0, shadow, light.shadowIntensity);
+                              }
+                              else {
+                                    normalOffsetPointShadow(shadowParams);
+                                    float shadow = getShadowOmniClusteredPCF3(shadowAtlasTexture, shadowParams, light.omniAtlasViewport, shadowEdgePixels, dLightDirW);
+                                    dAtten *= mix(1.0, shadow, light.shadowIntensity);
+                              }
+                           }
+                        }
+                  }
+                  if (isClusteredLightArea(light)) {
+                  {
+                           vec3 areaDiffuse = (dAttenD * dAtten) * light.color * dAtten3;
+                           areaDiffuse = mix(areaDiffuse, vec3(0), dLTCSpecFres);
+                           dDiffuseLight += areaDiffuse;
+                        }
+                        float areaLightSpecular;
+                        if (isClusteredLightRect(light)) {
+                           areaLightSpecular = getRectLightSpecular();
+                        }
+                        else if (isClusteredLightDisk(light)) {
+                           areaLightSpecular = getDiskLightSpecular();
+                        }
+                        else {
+                           areaLightSpecular = getSphereLightSpecular();
+                        }
+                        dSpecularLight += dLTCSpecFres * areaLightSpecular * dAtten * light.color * dAtten3;
+                  }
+                  else {
+                  {
+                           vec3 punctualDiffuse = dAtten * light.color * dAtten3;
+                           punctualDiffuse = mix(punctualDiffuse, vec3(0), dSpecularity);
+                           dDiffuseLight += punctualDiffuse;
+                        }
+                        vec3 halfDir = normalize(-dLightDirNormW + dViewDirW);
+                        dSpecularLight += getLightSpecular(halfDir) * dAtten * light.color * dAtten3 * getFresnel(dot(dViewDirW, halfDir), dSpecularity);
+                  }
+               }
+            }
+            void evaluateClusterLight(float lightIndex) {
+               ClusterLightData clusterLightData;
+               decodeClusterLightCore(clusterLightData, lightIndex);
+               if (acceptLightMask(clusterLightData))
+               evaluateLight(clusterLightData);
+            }
+            void addClusteredLights() {
+               vec3 cellCoords = floor((vPositionW - clusterBoundsMin) * clusterCellsCountByBoundsSize);
+               if (!(any(lessThan(cellCoords, vec3(0.0))) || any(greaterThanEqual(cellCoords, clusterCellsMax)))) {
+                  float cellIndex = dot(clusterCellsDot, cellCoords);
+                  float clusterV = floor(cellIndex * clusterTextureSize.y);
+                  float clusterU = cellIndex - (clusterV * clusterTextureSize.x);
+                  for (int lightCellIndex = 0; lightCellIndex < clusterMaxCells; lightCellIndex++) {
+                        vec4 lightIndices = texelFetch(clusterWorldTexture, ivec2(int(clusterU) + lightCellIndex, clusterV), 0);
+                        vec4 indices = lightIndices * 255.0;
+                        for (int i = 0; i < 4; i++) {
+                           if (indices.x <= 0.0)
+                              return;
+                           evaluateClusterLight(indices.x);
+                           indices = indices.yzwx;
+                        }
+                  }
+               }
+            }
+            void main(void) {
+               dReflection = vec4(0);
+               dVertexNormalW = normalize(vNormalW);
+               getViewDir();
+               getTBN();
+               getNormal();
+               getAlbedo();
+               getMetalness();
+               getGlossiness();
+               getSpecularity();
+               getEmission();
+               getReflDir();
+               getMetalnessModulate();
+               addAmbient();
+               dDiffuseLight = dDiffuseLight * (1.0 - dSpecularity);
+               addReflection();
+               dReflection.rgb *= getFresnel(dot(dViewDirW, dNormalW), dSpecularity);
+               dSpecularLight *= dSpecularity;
+               calcLTCLightValues();
+               addClusteredLights();
+               dSpecularity = vec3(1);
+               gl_FragColor.rgb = combineColor();
+               gl_FragColor.rgb += dEmission;
+               gl_FragColor.rgb = addFog(gl_FragColor.rgb);
+               gl_FragColor.rgb = toneMap(gl_FragColor.rgb);
+               gl_FragColor.rgb = gammaCorrectOutput(gl_FragColor.rgb);
+               gl_FragColor.a = 1.0 + ${Math.random()};
+            }
+            `;
+         }
+
+         var canvas = document.getElementById('my_Canvas');
+         gl = canvas.getContext('webgl2');
+         console.log("KHR_parallel_shader_compile supported: ", gl.getExtension('KHR_parallel_shader_compile'));
+
+         var vertices = [ -1,-1,-1, 1,-1,-1, 1, 1,-1 ];
+         var colors = [ 1,1,1, 1,1,1, 1,1,1 ];
+         var indices = [ 0,1,2 ];
+
+         var vertex_buffer = gl.createBuffer ();
+         gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+         var color_buffer = gl.createBuffer ();
+         gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+
+         var index_buffer = gl.createBuffer ();
+         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+         var vertCode = 'attribute vec3 position;'+
+            'uniform mat4 Pmatrix;'+
+            'uniform mat4 Vmatrix;'+
+            'uniform mat4 Mmatrix;'+
+            'attribute vec3 color;'
+            'varying vec3 vColor;'+
+
+            'void main(void) { '+
+               'gl_Position = Pmatrix*Vmatrix*Mmatrix*vec4(position, 1.);'+
+               'vColor = color;'+
+            '}';
+
+         var fragCode = 'precision mediump float;'+
+            'varying vec3 vColor;'+
+            'void main(void) {'+
+               'gl_FragColor = vec4(vColor, 1.);'+
+            '}';
+
+         var vertShader = gl.createShader(gl.VERTEX_SHADER);
+         gl.shaderSource(vertShader, vertCode);
+         gl.compileShader(vertShader);
+
+         var fragShader = gl.createShader(gl.FRAGMENT_SHADER);
+         gl.shaderSource(fragShader, fragCode);
+         gl.compileShader(fragShader);
+
+         var shaderProgram = gl.createProgram();
+         gl.attachShader(shaderProgram, vertShader);
+         gl.attachShader(shaderProgram, fragShader);
+         gl.linkProgram(shaderProgram);
+
+         var Pmatrix = gl.getUniformLocation(shaderProgram, "Pmatrix");
+         var Vmatrix = gl.getUniformLocation(shaderProgram, "Vmatrix");
+         var Mmatrix = gl.getUniformLocation(shaderProgram, "Mmatrix");
+         gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+
+         var position = gl.getAttribLocation(shaderProgram, "position");
+         gl.vertexAttribPointer(position, 3, gl.FLOAT, false,0,0) ; //position
+         gl.enableVertexAttribArray(position);
+         gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+
+         var color = gl.getAttribLocation(shaderProgram, "color");
+         gl.vertexAttribPointer(color, 3, gl.FLOAT, false,0,0) ; //color
+         gl.enableVertexAttribArray(color);
+         gl.useProgram(shaderProgram);
+
+         function get_projection(angle, a, zMin, zMax) {
+            var ang = Math.tan((angle*.5)*Math.PI/180);//angle*.5
+            return [
+               0.5/ang, 0 , 0, 0,
+               0, 0.5*a/ang, 0, 0,
+               0, 0, -(zMax+zMin)/(zMax-zMin), -1,
+               0, 0, (-2*zMax*zMin)/(zMax-zMin), 0
+            ];
+         }
+
+         var proj_matrix = get_projection(40, canvas.width/canvas.height, 1, 100);
+         var mov_matrix = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+         var view_matrix = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+         view_matrix[14] = view_matrix[14]-6; //zoom
+
+         function rotateZ(m, angle) {
+            var c = Math.cos(angle);
+            var s = Math.sin(angle);
+            var mv0 = m[0], mv4 = m[4], mv8 = m[8]; 
+
+            m[0] = c*m[0]-s*m[1];
+            m[4] = c*m[4]-s*m[5];
+            m[8] = c*m[8]-s*m[9];
+            m[1] = c*m[1]+s*mv0;
+            m[5] = c*m[5]+s*mv4;
+            m[9] = c*m[9]+s*mv8;
+         }
+
+
+
+
+
+
+         /*=================SHADER COMPILATION ===========================*/
+
+         let shaders = [];
+         let waitStartTime;
+         const appStartTime = Date.now();
+
+         function compileManyShaders(count) {
+
+            console.time('generate');
+
+            // generate source code
+            for (let i = 0; i < count; i++) {
+               shaders.push({
+                  vsCode: getVS(),
+                  fsCode: getFS(),
+                  index: i
+               });
+            }
+            console.timeEnd('generate');
+
+            console.time('compile');
+
+            // compile all
+            shaders.forEach((shader) => {
+               shader.vertShader = gl.createShader(gl.VERTEX_SHADER);
+               gl.shaderSource(shader.vertShader, shader.vsCode);
+               gl.compileShader(shader.vertShader);
+
+               shader.fragShader = gl.createShader(gl.FRAGMENT_SHADER);
+               gl.shaderSource(shader.fragShader, shader.fsCode);
+               gl.compileShader(shader.fragShader);
+            });
+
+            console.timeEnd('compile');
+
+            console.time('link');
+
+            // link all
+            shaders.forEach((shader) => {
+               shader.program = gl.createProgram();
+               gl.attachShader(shader.program, shader.vertShader);
+               gl.attachShader(shader.program, shader.fragShader);
+               gl.linkProgram(shader.program);
+            });
+            console.timeEnd('link');
+
+            waitStartTime = Date.now();
+         }
+
+         function waitManyShaders() {
+            const ext = gl.getExtension('KHR_parallel_shader_compile');
+
+            shaders = shaders.filter((shader) => {
+
+               let done = true;  // without extension assume done
+               if (ext) {
+                  console.time("COMPLETION_STATUS");
+                  done = gl.getProgramParameter(shader.program, ext.COMPLETION_STATUS_KHR);
+                  console.timeEnd("COMPLETION_STATUS");
+
+                  if (!done) {
+                     return true;   // try next frame
+                  }
+               }
+
+               if (done) {
+                  console.time("LINK_STATUS");
+                  gl.getProgramParameter(shader.program, gl.LINK_STATUS);
+                  console.timeEnd("LINK_STATUS");
+               }
+               return !done;
+            });
+
+            console.log('left to finish', shaders.length);
+
+            if (!shaders.length) {
+               console.log('TOTAL WAIT TIME:', Date.now() - waitStartTime, 'ms');
+            }
+         }
+
+         /*============================================*/
+
+
+
+
+
+
+         var time_old = 0;
+         var animate = function(time) {
+            var dt = time-time_old;
+            rotateZ(mov_matrix, dt*0.002);
+            time_old = time;
+
+            /*============================================*/
+            // wait till all shaders are done compiling
+            if (shaders.length) {
+               console.log('-------- DT: ', dt, 'ms');
+               waitManyShaders();
+            }
+            /*============================================*/
+
+            // render the triangle
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.clearColor(0.5, 0.5, 0.5, 0.9);
+            gl.clearDepth(1.0);
+            gl.viewport(0.0, 0.0, canvas.width, canvas.height);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            gl.uniformMatrix4fv(Pmatrix, false, proj_matrix);
+            gl.uniformMatrix4fv(Vmatrix, false, view_matrix);
+            gl.uniformMatrix4fv(Mmatrix, false, mov_matrix);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+            gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+            window.requestAnimationFrame(animate);
+         }
+         animate(0);
+      </script>
+   </body>
+</html>
