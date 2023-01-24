@@ -28,16 +28,16 @@ None of the tested browser / OS combination delivered smooth triangle rotation w
 
 ### Chrome MacOS
 - compilation, linking, COMPLETION_STATUS_KHR and LINK_STATUS are fast, the extension is working well.
-- on multiple occasions, requestAnimationFrame is not being called for 1s or more, and so the bottleneck seems to have just moved to be inside the browser, instead of [LINK STATUS STEP]. The result is that the triangle still does not smoothly rotate at all.
+- on multiple occasions, requestAnimationFrame is not being called for 1s or more, and so the bottleneck seems to have just moved to be inside the browser, instead of [LINK STATUS STEP]. It seems all shareds are completed during the same frame. The result is that the triangle still does not smoothly rotate at all.
 
 ### Safari MacOS (Metal backend)
-- compilation is instant, all the time is taken by [LINK STEP]. [COMPLETION STEP] and [LINK STATUS STEP] are instant, as shader has already been fully processed. So there does not seem to be any advantage in using the extension here.
+- compilation is instant, all the time is taken by [LINK STEP] during which all the works seems to take place. [COMPLETION STEP] and [LINK STATUS STEP] are instant, as shader has already been fully processed. So there does not seem to be any advantage in using the extension here.
 
 ### Firefox MacOS
 - extension is not implemented, all time is taken by [LINK STATUS STEP]
 
 ### Chrome Windows 10
-- 10 shaders seem to get processed nicely, almost as if extension worked perfectly. When compiling 50 shaders, similarly to MacOS, we get multiple 1s or longer intervals when requestAnimationFrame is not called.
+- 10 shaders seem to get processed nicely, almost as if extension worked perfectly (some DTs are slightly longer). When compiling 50 shaders, similarly to MacOS, we get multiple 1s or longer intervals when requestAnimationFrame is not called.
 
 ### Firefox Windows 10
 - extension is not implemented, all time is taken by [LINK STATUS STEP]
