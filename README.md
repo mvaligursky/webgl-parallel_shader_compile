@@ -45,5 +45,9 @@ None of the tested browser / OS combination delivered smooth triangle rotation w
 ## Separate note
 - the PBR/clustered/area lights shader has a compilation time on Windows considerably longer than on MacOS.
 
+# Created browser issues:
+- Chromium: https://bugs.chromium.org/p/chromium/issues/detail?id=1412083
+- WebKit: https://bugs.webkit.org/show_bug.cgi?id=251514
+
 # References
 [1] - Basic WebGl spinning triangle application is based on https://www.tutorialspoint.com/webgl/webgl_rotation.htm
